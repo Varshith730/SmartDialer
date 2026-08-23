@@ -120,8 +120,58 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("Campaign Config")
-    st.write(f"**Mode:** `{runner.config.dial_mode.value}`")
+    st.subheader("⚙️ Live Campaign Tuner")
+    with st.expander("Edit Parameters", expanded=False):
+        new_mode_str = st.selectbox(
+            "Dial Mode:",
+            ["predictive", "progressive"],
+            index=0 if runner.campaign.dial_mode == DialMode.PREDICTIVE else 1,
+        )
+        new_provider_str = st.selectbox(
+            "Telecom Provider:",
+            ["provider_a", "provider_b"],
+            index=0 if runner.provider.name == "provider_a" else 1,
+        )
+        new_max_calls_agent = st.slider(
+            "Max Calls / Agent:",
+            min_value=1.0,
+            max_value=5.0,
+            value=float(runner.campaign.max_calls_per_agent),
+            step=0.5,
+        )
+        new_max_concurrent = st.slider(
+            "Max Concurrent Ceiling:",
+            min_value=5,
+            max_value=150,
+            value=int(runner.campaign.max_concurrent_calls),
+            step=5,
+        )
+        new_sim_rate = st.slider(
+            "Provider Answer Rate (%):",
+            min_value=5,
+            max_value=100,
+            value=int(runner.provider._answer_rate * 100) if hasattr(runner.provider, '_answer_rate') else 55,
+            step=5,
+        )
+
+        if st.button("💾 Apply Settings", use_container_width=True):
+            runner.campaign.dial_mode = DialMode.PREDICTIVE if new_mode_str == "predictive" else DialMode.PROGRESSIVE
+            runner.config.dial_mode = runner.campaign.dial_mode
+            runner.campaign.max_calls_per_agent = new_max_calls_agent
+            runner.campaign.max_concurrent_calls = new_max_concurrent
+            runner.set_answer_rate(new_sim_rate / 100.0)
+            
+            if new_provider_str != runner.provider.name:
+                from app.providers.provider_a import ProviderA
+                from app.providers.provider_b import ProviderB
+                if new_provider_str == "provider_b":
+                    runner.provider = ProviderB(answer_rate=new_sim_rate / 100.0, delay_scale=0.05)
+                else:
+                    runner.provider = ProviderA(answer_rate=new_sim_rate / 100.0, delay_scale=0.05)
+            st.success("Campaign parameters updated!")
+            st.rerun()
+
+    st.write(f"**Mode:** `{runner.campaign.dial_mode.value}`")
     st.write(f"**Provider:** `{runner.provider.name}`")
     st.write(f"**Max Concurrent:** `{runner.campaign.max_concurrent_calls}`")
     st.write(f"**Max Calls/Agent:** `{runner.campaign.max_calls_per_agent}x`")

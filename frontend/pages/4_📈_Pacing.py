@@ -82,3 +82,57 @@ with col_c1:
     render_answer_rate_convergence_chart(cycles_data)
 with col_c2:
     render_pacing_history_chart(cycles_data)
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Interactive What-If Pacing Simulator
+# ---------------------------------------------------------------------------
+st.subheader("🎛️ Interactive 'What-If' Pacing & Safety Simulator")
+st.markdown("Test hypothetical operational conditions and observe the exact pacing calculation and Safety Controller clamping.")
+
+with st.expander("🔬 Open What-If Scenario Sandbox", expanded=True):
+    sim_col1, sim_col2 = st.columns(2)
+    with sim_col1:
+        sim_avail_agents = st.slider("Hypothetical Available Agents:", min_value=1, max_value=50, value=10)
+        sim_answer_rate = st.slider("Hypothetical Answer Rate (%):", min_value=5, max_value=100, value=40)
+        sim_max_calls_agent = st.slider("Campaign Max Calls / Agent:", min_value=1.0, max_value=5.0, value=3.0, step=0.5)
+    with sim_col2:
+        sim_inflight = st.slider("Current In-Flight Calls:", min_value=0, max_value=30, value=2)
+        sim_campaign_cap = st.slider("Hard Campaign Concurrency Cap:", min_value=5, max_value=100, value=50)
+
+    # Compute pacing math step-by-step
+    import math
+    rate_frac = max(0.01, sim_answer_rate / 100.0)
+    raw_target = math.ceil(sim_avail_agents / rate_frac)
+    agent_cap = int(sim_avail_agents * sim_max_calls_agent)
+    capped_target = min(raw_target, agent_cap)
+    sim_requested = max(0, capped_target - sim_inflight)
+    sim_requested = min(sim_requested, sim_avail_agents)
+
+    # Compute safety capacity
+    safe_capacity = min(
+        sim_avail_agents,
+        sim_campaign_cap - sim_inflight,
+    )
+    safe_capacity = max(0, safe_capacity)
+    
+    if sim_requested <= safe_capacity and sim_requested > 0:
+        sim_decision = "APPROVE"
+        sim_approved = sim_requested
+    elif safe_capacity > 0:
+        sim_decision = "REDUCE"
+        sim_approved = safe_capacity
+    else:
+        sim_decision = "REJECT"
+        sim_approved = 0
+
+    st.markdown("#### Calculation Outcome:")
+    o1, o2, o3, o4 = st.columns(4)
+    o1.metric("1. Target In-Flight", f"{capped_target}", f"Formula: ceil({sim_avail_agents} / {rate_frac:.2f})")
+    o2.metric("2. Pacing Requested", f"{sim_requested}", f"- {sim_inflight} in-flight")
+    o3.metric("3. Safe Capacity", f"{safe_capacity}", f"Max agents free")
+    o4.metric("4. Safety Decision", f"{sim_decision} ({sim_approved})")
+
+    st.caption(f"Mathematical Trace: `min(ceil({sim_avail_agents} / {rate_frac:.2f}), {agent_cap}) - {sim_inflight} = {sim_requested}` ➔ Safety Bounds: `{sim_decision} ➔ {sim_approved} approved calls`")
+

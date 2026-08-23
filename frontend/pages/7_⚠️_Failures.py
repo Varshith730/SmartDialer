@@ -23,13 +23,14 @@ col_f1, col_f2 = st.columns(2)
 with col_f1:
     st.subheader("1. Provider & Telephony Disruptions")
 
-    if st.button("🔴 Simulate Provider Outage (Trip Circuit Breaker)", use_container_width=True):
+    if st.button("🔴 Trip Circuit Breaker (Force OPEN)", use_container_width=True):
         runner.circuit_breaker.force_open()
         st.error("Circuit Breaker forced to OPEN state! Next cycle Safety Controller will REJECT calls.")
 
-    if st.button("📉 Drop Answer Rate to 10%", use_container_width=True):
-        runner.set_answer_rate(0.10)
-        st.warning("Provider answer rate set to 10%. Predictive Engine EMA will adapt downward.")
+    custom_rate = st.slider("Inject Custom Answer Rate (%):", min_value=1, max_value=100, value=15, step=5)
+    if st.button(f"📉 Set Answer Rate to {custom_rate}%", use_container_width=True):
+        runner.set_answer_rate(custom_rate / 100.0)
+        st.warning(f"Provider answer rate set to {custom_rate}%. Predictive Engine EMA will adapt downward.")
 
     if st.button("🌪️ Switch to Provider B (Chaotic Provider)", use_container_width=True):
         runner.provider = ProviderB(answer_rate=0.40, delay_scale=0.05, duplicate_probability=0.5, out_of_order_probability=0.3)
@@ -38,12 +39,13 @@ with col_f1:
 with col_f2:
     st.subheader("2. Worker Crash & Agent Drops")
 
-    if st.button("💥 Drop 10 Available Agents (Simulate Shift End)", use_container_width=True):
-        runner.set_agents_offline(10)
-        st.error("10 available agents moved to OFFLINE. Safety Controller will throttle capacity immediately.")
+    avail_count = len([a for a in runner.store.list_agents() if a.state.value == "AVAILABLE"])
+    drop_count = st.number_input("Number of Agents to Take OFFLINE:", min_value=1, max_value=max(1, avail_count), value=min(10, max(1, avail_count)))
+    if st.button(f"💥 Drop {drop_count} Available Agents", use_container_width=True):
+        runner.set_agents_offline(drop_count)
+        st.error(f"{drop_count} available agents moved to OFFLINE. Safety Controller will throttle capacity immediately.")
 
     if st.button("💀 Simulate Worker Crash (Expired Reservation Lease)", use_container_width=True):
-        # Create a call in INITIATED with expired lease
         import uuid
         from datetime import datetime, timedelta, timezone
         from app.models.call import Call
