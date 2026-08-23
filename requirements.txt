@@ -1,0 +1,9 @@
+# SmartDialer — Python dependencies
+# Standard library is used wherever practical.
+# pytest is the only external runtime dependency for the prototype.
+
+pytest>=8.0.0
+pytest-timeout>=2.3.0
+streamlit>=1.35.0
+plotly>=5.20.0
+pandas>=2.0.0   # prevents hung threads from stalling the test suite
