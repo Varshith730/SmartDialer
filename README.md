@@ -1,257 +1,249 @@
-# SmartDialer
+# SmartDialer — CredResolve Assignment
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smartdialer-credresolve.streamlit.app/)
 [![Tests](https://img.shields.io/badge/tests-202%20passed-success)](https://github.com/Varshith730/SmartDialer)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](https://www.python.org/)
 
-> 🌐 **Live Hosted Control Center:** **[https://smartdialer-credresolve.streamlit.app/](https://smartdialer-credresolve.streamlit.app/)**
-> 
-> *The SmartDialer Operations Suite is deployed and running live on Streamlit Cloud. You can interact with the dashboard, dispatch calls, tune pacing, and inject chaos without local installation.*
-
-A fully functional progressive and predictive dialer prototype for a collections environment, built to demonstrate system design, concurrency correctness, safety bounding, and fault tolerance — without Kafka, Redis, Kubernetes, or microservices.
+> 🌐 **Live Hosted Application:** **[https://smartdialer-credresolve.streamlit.app/](https://smartdialer-credresolve.streamlit.app/)**  
+> *The SmartDialer Operations Suite is deployed and running live on Streamlit Cloud. You can interact with the live dashboard, dispatch calls, tune pacing, and inject chaos without any local installation.*
 
 ---
 
-## Quick Start
+## 1. Overview
+SmartDialer is a production-grade functional prototype of an outbound progressive and predictive dialing system tailored for debt collection and high-touch contact environments. The system optimizes call center throughput by intelligently over-dialing based on empirical answer rates while enforcing strict safety constraints to prevent dropped calls or borrower abandonment.
 
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+The implementation prioritizes correctness over complexity: it demonstrates atomic concurrency, race-condition resistance, idempotent webhook processing, out-of-order event recovery, and carrier fault-tolerance without relying on heavy external infrastructure like Kafka, Redis, or microservices.
 
-# 2. Run all tests (202 tests, ~30s)
-python -m pytest tests/ -q
+---
 
-# 3. Launch the Streamlit Control Center Dashboard
-streamlit run frontend/app.py
+## 2. Key Architecture
 
-# 4. Run High-Concurrency Load Test (100 / 1,000 / 10,000 agents)
-python scripts/load_test.py
+The system enforces a strict linear decision and execution pipeline:
 
-# 5. Run the live demo (predictive mode, ~5s)
-python scripts/demo.py
-
-# 6. Run the three-scenario comparison
-python scripts/simulation.py
+```
+Predictive Pacing Engine  (Proposes volume based on EMA answer rate)
+         │
+         ▼
+  Safety Controller       (Decides final capacity bounds: APPROVE / REDUCE / REJECT)
+         │
+         ▼
+   Call Allocator         (Executes atomic agent + borrower reservation)
+         │
+         ▼
+  Telecom Provider        (Carrier delivers async telephony signaling)
 ```
 
+### Core Architecture Invariant:
+- **Prediction proposes:** The `PredictiveEngine` estimates required calls using Exponential Moving Average (EMA). It holds **zero references** to telecom providers and cannot initiate calls.
+- **Safety decides:** The `SafetyController` is the **final authority**. It evaluates live available agents, in-flight limits, provider health, and circuit breaker status to calculate a definitive safe bound.
+- **Allocation executes:** The `CallAllocator` performs atomic 9-step reservation with lease deadlines.
+- **Providers report events:** Telephony carriers (`ProviderA`, `ProviderB`) deliver asynchronous webhooks into the `EventProcessor`.
+
 ---
 
-## Project Structure
+## 3. Features (Actually Implemented in Code)
+- **Progressive Dialing Mode:** Strict 1:1 agent-to-call matching ensuring zero dropped calls.
+- **Predictive Pacing Mode:** Statistical over-dialing utilizing Exponential Moving Average (EMA, $\alpha=0.15$) answer rate tracking.
+- **Safety Controller Hard Boundary:** Evaluates all call requests and enforces real-time hard capacity clamping.
+- **Atomic Concurrency & Row Locking:** Thread-safe in-memory `StateStore` with per-row locks preventing duplicate agent reservations under high multi-worker concurrency.
+- **Deterministic Priority Borrower Selection:** Priority queue ordering (`HIGH=1 < MEDIUM=2 < LOW=3`) with FIFO tie-breaking within tiers.
+- **Telecom Carrier Abstraction & Circuit Breaker:** Pluggable `TelecomProvider` ABC with automated 3-state `CircuitBreaker` (`CLOSED`, `OPEN`, `HALF_OPEN`).
+- **Mock Carrier Implementations:**
+  - `Provider A`: High-reliability carrier with ordered async events.
+  - `Provider B`: Chaotic carrier with duplicate events, out-of-order deliveries, timeouts, and latency.
+- **Idempotency Guard:** $O(1)$ duplicate webhook detection via unique `processed_event_ids` sets on call records.
+- **Monotonic Rank Out-of-Order Handling:** Rejects stale or backwards transitions (e.g., late `ANSWERED` arriving after `COMPLETED`). Terminal states are black holes.
+- **Lease-Based Worker Crash Recovery:** Background `Reconciler` detects expired worker leases, canceling uninitiated calls while protecting live `CONNECTED` conversations.
+- **Interactive Streamlit Operations Suite:** 8-view dashboard with KPI metrics, Plotly visualizations, live campaign parameter tuning, and chaos failure injection buttons.
+- **High-Concurrency Load Testing:** Automated benchmarking measuring throughput across 100, 1,000, and 10,000 entities (up to 44,000 ops/sec).
 
+---
+
+## 4. Technology Stack
+- **Language & Runtime:** Python 3.11+ / Python 3.13
+- **Test Framework:** `pytest` (202 test suite), `pytest-timeout`
+- **Concurrency & Synchronization:** Standard Library (`threading.Lock`, `threading.Barrier`, `concurrent.futures.ThreadPoolExecutor`)
+- **Frontend & Visualization:** `Streamlit`, `Plotly`, `Pandas`
+- **Documentation & Reporting:** `ReportLab` (PDF generation), Markdown
+
+---
+
+## 5. Project Structure
 ```
 SmartDialer/
 ├── app/
 │   ├── models/
-│   │   ├── agent.py         # Agent dataclass + AgentState enum
-│   │   ├── borrower.py      # Borrower dataclass + priority/status enums
-│   │   ├── call.py          # Call state machine (idempotency + ordering)
-│   │   └── campaign.py      # Campaign config + DialMode enum
+│   │   ├── agent.py               # 7-state Agent model + reservability logic
+│   │   ├── borrower.py            # Priority-ordered Borrower model
+│   │   ├── call.py                # 9-state Call machine (monotonic ranks + idempotency)
+│   │   └── campaign.py            # Campaign settings + DialMode enum
 │   ├── repository/
-│   │   └── state_store.py   # In-memory store with per-row locking
+│   │   └── state_store.py         # Thread-safe in-memory store (per-row locking)
 │   ├── dialer/
-│   │   ├── allocator.py     # Executes one approved call (reserve→initiate)
-│   │   ├── progressive.py   # 1-agent-to-1-call dialler
-│   │   ├── predictive.py    # EMA-based pacing engine
-│   │   └── reconciler.py    # Lease-based crash recovery
+│   │   ├── allocator.py           # 9-step atomic allocation pipeline
+│   │   ├── progressive.py         # 1:1 progressive dialer
+│   │   ├── predictive.py          # EMA-based pacing engine
+│   │   └── reconciler.py          # Lease-based worker crash recovery
 │   ├── safety/
-│   │   ├── controller.py    # Final call-count authority (APPROVE/REDUCE/REJECT)
-│   │   └── circuit_breaker.py  # CLOSED/OPEN/HALF_OPEN provider health tracking
+│   │   ├── controller.py          # Safety Controller (hard boundary)
+│   │   └── circuit_breaker.py     # CLOSED -> OPEN -> HALF_OPEN breaker
 │   ├── providers/
-│   │   ├── interface.py     # TelecomProvider ABC + NullProvider
-│   │   ├── provider_a.py    # Reliable provider (ordered events)
-│   │   └── provider_b.py    # Chaotic provider (duplicates, out-of-order)
+│   │   ├── interface.py           # TelecomProvider ABC + NullProvider
+│   │   ├── provider_a.py          # Reliable provider (ordered events)
+│   │   └── provider_b.py          # Chaotic provider (duplicates, out-of-order)
 │   ├── events/
-│   │   └── processor.py     # Routes provider events → call state transitions
+│   │   └── processor.py           # Ingestion router & terminal side-effects
 │   └── simulation/
-│       ├── scenarios.py     # Benchmark scenarios A, B, C, D
-│       └── runner.py        # Full pipeline orchestrator with step/run modes
+│       ├── scenarios.py           # Benchmark scenarios A, B, C, D
+│       └── runner.py              # Full pipeline orchestrator with step/run modes
 ├── frontend/
-│   ├── app.py               # Streamlit main entrypoint & operations dashboard
-│   ├── state.py             # Shared simulation session state
-│   ├── components/          # Reusable KPI cards, Plotly charts, styled tables
-│   └── pages/
-│       ├── 1_📊_Dashboard.py
-│       ├── 2_👥_Agents.py
-│       ├── 3_📞_Calls.py
-│       ├── 4_📈_Pacing.py
-│       ├── 5_🛡️_Safety.py
-│       ├── 6_📡_Providers.py
-│       ├── 7_⚠️_Failures.py
-│       └── 8_🧪_Simulation.py
-├── tests/
-│   ├── test_agents.py           # Agent model + store (21 tests)
-│   ├── test_calls.py            # Call state machine (24 tests)
-│   ├── test_concurrency.py      # Race condition tests (6 tests)
-│   ├── test_pacing.py           # Allocator + Progressive + Predictive (53 tests)
-│   ├── test_provider_outage.py  # Circuit breaker + Safety Controller (33 tests)
-│   ├── test_idempotency.py      # Duplicate event handling (19 tests)
-│   ├── test_out_of_order_events.py  # Out-of-order events (18 tests)
-│   ├── test_worker_crash.py     # Lease expiry + reconciler (25 tests)
-│   └── test_end_to_end.py       # Full pipeline integration (15 tests)
+│   ├── app.py                     # Streamlit main entrypoint & operations dashboard
+│   ├── state.py                   # Shared simulation session state
+│   ├── components/                # Reusable KPI cards, Plotly charts, styled tables
+│   │   ├── metrics.py
+│   │   ├── charts.py
+│   │   └── tables.py
+│   └── pages/                     # Multi-page views (Dashboard, Agents, Calls, etc.)
+├── tests/                         # 9 test suites (202 unit & integration tests)
 ├── scripts/
-│   ├── demo.py              # Quick interactive CLI demo
-│   ├── simulation.py        # Three-scenario comparison CLI
-│   └── load_test.py         # High-concurrency load testing (10k agents)
-└── docs/
-    ├── architecture.md      # Pipeline, components, and Mermaid diagram
-    ├── state_machines.md    # Call, Agent, Borrower, CircuitBreaker state models
-    └── architecture_decision.md # Design decisions & technical interview defense
+│   ├── demo.py                    # Quick interactive CLI demo (~5s)
+│   ├── simulation.py              # Three-scenario comparison CLI
+│   ├── load_test.py               # High-concurrency load testing (10k agents)
+│   └── generate_pdfs.py           # Technical PDF documentation generator
+├── docs/
+│   ├── architecture.md            # Pipeline architecture with Mermaid diagram
+│   ├── state_machines.md          # State transition diagrams & invariants
+│   ├── architecture_decision.md   # Design decisions & technical defense answers
+│   └── submission_guide.md        # CredResolve evaluation guide
+└── screenshots/                   # Application dashboard screenshots
 ```
 
 ---
 
-## Architecture
-
-The system enforces a strict one-way pipeline:
-
-```
-Campaign
-  ↓
-PredictiveEngine          ← proposes N calls based on EMA answer rate
-  ↓  requested_calls
-SafetyController          ← APPROVES, REDUCES, REJECTS, or FALLBACK_PROGRESSIVE
-  ↓  approved_count
-CallAllocator             ← reserves agent + borrower, calls provider
-  ↓  initiate_call()
-TelecomProvider           ← delivers events asynchronously
-  ↓  event_callback()
-EventProcessor            ← applies state transitions (idempotent + ordered)
-  ↓
-StateStore                ← single source of truth for all entity state
-```
-
-**The Predictive Engine never talks to the provider.
-The Safety Controller is never bypassed.**
-
-See [`docs/architecture.md`](docs/architecture.md) for a full component breakdown.
-
----
-
-## Key Design Properties
-
-### Concurrency Correctness
-- `StateStore` uses two-level locking: per-entity-type lock for bulk reads, per-row lock for atomic mutations.
-- `atomic_reserve_agent()` and `atomic_reserve_borrower()` check-and-set within a single lock acquisition — no TOCTOU race.
-- Equivalent PostgreSQL pattern: `UPDATE agents SET state='RESERVED' WHERE id=? AND state='AVAILABLE'` — check `rowcount == 1`.
-
-### Idempotency (Invariant 4)
-- Every `ProviderEvent` carries a unique `event_id`.
-- `call.apply_transition(state, event_id)` stores processed IDs in `call.processed_event_ids`.
-- Duplicate events with the same `event_id` are silently dropped.
-- Provider B floods the system with 3× duplicates; the system stays consistent.
-
-### Out-of-Order Events (Invariant 5)
-- Each `CallState` has a rank (QUEUED=0 → COMPLETED=6).
-- Backwards transitions (rank ≤ current rank) are rejected.
-- Terminal states (COMPLETED, FAILED, CANCELLED) reject all further transitions — they are black holes.
-- Provider B delivers `COMPLETED → ANSWERED → RINGING`; the call correctly ends in COMPLETED.
-
-### Worker Crash Recovery (Invariant 6)
-- Every reservation writes `lease_until = now + N seconds` on the agent and call.
-- The `Reconciler` periodically scans for expired leases via `find_expired_reservations()`.
-- Pre-provider crashes → call marked CANCELLED; post-provider crashes → FAILED.
-- Live calls (CONNECTED/ANSWERED) are never killed by the reconciler.
-
-### Provider Abstraction
-- `TelecomProvider` is an abstract base class.
-- The allocator depends only on `is_healthy()` and `initiate_call()`.
-- Swapping providers requires zero changes to the allocator, safety controller, or pacing engine.
-
----
-
-## Running Tests
+## 6. Installation
 
 ```bash
-# All tests, quiet
-python -m pytest tests/ -q --timeout=30
+# 1. Clone the repository
+git clone https://github.com/Varshith730/SmartDialer.git
+cd SmartDialer
 
-# All tests, verbose
-python -m pytest tests/ -v --timeout=30
+# 2. Create and activate a virtual environment (optional but recommended)
+python -m venv venv
 
-# Specific phase
-python -m pytest tests/test_calls.py tests/test_concurrency.py -v
+# Windows:
+venv\Scripts\activate
 
-# With deprecation warnings as errors (ensures Python 3.13 compatibility)
-python -m pytest tests/ -v --timeout=30 -W error::DeprecationWarning
-```
+# Linux / macOS:
+source venv/bin/activate
 
-**Test counts by file:**
-
-| File | Tests | What it covers |
-|------|------:|----------------|
-| `test_agents.py` | 21 | Agent model, state transitions, store operations |
-| `test_calls.py` | 24 | Call state machine, idempotency, terminal states |
-| `test_concurrency.py` | 6 | Race conditions, atomic reservation |
-| `test_pacing.py` | 53 | Allocator, progressive dialler, predictive engine |
-| `test_provider_outage.py` | 33 | Circuit breaker, safety controller decisions |
-| `test_idempotency.py` | 19 | Duplicate event rejection at model + processor level |
-| `test_out_of_order_events.py` | 18 | Backwards/scrambled events, terminal black hole |
-| `test_worker_crash.py` | 25 | Lease expiry, reconciler, crash recovery |
-| `test_end_to_end.py` | 15 | Full pipeline integration, all three modes |
-| **Total** | **202** | |
-
----
-
-## Demo Script Examples
-
-```bash
-# Default: 8 agents, 35 borrowers, predictive, Provider A, 8 cycles
-python scripts/demo.py
-
-# Progressive mode (1:1 ratio for comparison)
-python scripts/demo.py --mode progressive
-
-# Chaotic Provider B (duplicates, out-of-order events)
-python scripts/demo.py --provider b --cycles 10
-
-# Low answer rate (Safety Controller will REDUCE requests)
-python scripts/demo.py --answer-rate 0.20 --agents 15 --borrowers 80
-
-# Three-scenario comparison (takes ~30s)
-python scripts/simulation.py
-```
-
-**Sample output:**
-```
-===================================================================================================================
-  SmartDialer Simulation  |  Mode: predictive  |  Provider: provider_a  |  Agents: 8  |  Borrowers: 35
-===================================================================================================================
-Cycle  Available  Dialing  Connect    Wrap-Up  Inflight   Done   Fail   Cncl  AnswerRate           SC Decision
--------------------------------------------------------------------------------------------------------------------
-    1          0        8        0          0        8      0      0      0       50.0%            APPROVE(8)
-    2          5        3        0          0        3      5      3      0       69.3%            APPROVE(3)
-    3          1        7        0          0        7      6      5      0       57.5%            APPROVE(7)
-    4          6        2        0          0        2     12      6      0       80.7%            APPROVE(2)
-
-============================================================
-  Calls initiated: 35  |  Answered: 21  |  Answer rate: 60.0%
-  EMA answer rate: 89.7%  |  Circuit Breaker: CLOSED
-============================================================
-```
-
----
-
-## Design Decisions
-
-See [`docs/decisions.md`](docs/decisions.md) for full Architecture Decision Records.
-
-Key decisions:
-- **In-memory store with interface abstraction**: Zero external dependencies; drop-in PostgreSQL replacement requires only implementing the `StateStore` interface.
-- **Standard library only** (plus pytest): No Celery, Redis, Kafka, or Kubernetes.
-- **EMA over ML**: Transparent, one-formula answer-rate estimation that a reviewer can trace by hand.
-- **Safety Controller as hard boundary**: No code path from the pacing engine to the provider exists without passing through the controller.
-- **Rank-ordered state machine**: Total ordering on `CallState` makes out-of-order detection O(1) per event.
-
----
-
-## Requirements
-
-- Python 3.11+
-- pytest ≥ 8.0
-- pytest-timeout ≥ 2.3
-
-```bash
+# 3. Install required dependencies
 pip install -r requirements.txt
 ```
 
-No other runtime dependencies.
+---
+
+## 7. Run Application
+
+To start the interactive **SmartDialer Operations Suite** dashboard:
+
+```bash
+python -m streamlit run frontend/app.py
+```
+Open your browser at `http://localhost:8501`.
+
+---
+
+## 8. Run Tests
+
+Execute the automated test suite (202 tests across 9 test files):
+
+```bash
+# Run quiet test suite (~25-35 seconds)
+python -m pytest tests/ -q
+
+# Run verbose suite with individual test names
+python -m pytest tests/ -v
+```
+
+---
+
+## 9. Run Simulation
+
+Execute the multi-scenario comparative simulation:
+
+```bash
+python scripts/simulation.py
+```
+*Runs Progressive vs. Predictive vs. Chaotic Provider B side-by-side with full metric tables.*
+
+---
+
+## 10. Run Load Test
+
+Execute high-concurrency throughput benchmarks across 100, 1,000, and 10,000 agents:
+
+```bash
+python scripts/load_test.py
+```
+
+---
+
+## 11. Live Demo
+
+The application is deployed and publicly accessible:  
+👉 **[https://smartdialer-credresolve.streamlit.app/](https://smartdialer-credresolve.streamlit.app/)**
+
+---
+
+## 12. Failure Handling
+
+SmartDialer handles failure conditions at every layer:
+1. **Carrier Outages:** When consecutive provider failures exceed threshold (default: 5), `CircuitBreaker` trips to `OPEN`. The `SafetyController` immediately blocks all new calls without killing active conversations. After a cooldown, a single probe is admitted in `HALF_OPEN` state.
+2. **Worker Server Crashes:** If an allocation worker crashes between reserving an agent and initiating a call, its lease expires. The background `Reconciler` discovers the expired lease and safely returns the agent to `AVAILABLE`.
+3. **Shift End / Sudden Agent Drop:** If agents suddenly disconnect or move `OFFLINE`, the `SafetyController` instantly recalculates capacity against live available agents, refusing to trust stale predictions.
+
+---
+
+## 13. Concurrency
+
+SmartDialer implements a two-level locking model:
+- **Entity-Level Locks:** Protect snapshot queries and list operations.
+- **Row-Level Locks:** Dedicated `threading.Lock` per agent and borrower ID for atomic check-and-set operations (`atomic_reserve_agent`, `atomic_reserve_borrower`).
+- **Race Condition Safety:** Verified in `tests/test_concurrency.py` where 50 concurrent worker threads attempt to reserve the exact same agent simultaneously; exactly 1 worker succeeds and 49 fail safely.
+
+In PostgreSQL, this translates directly to:
+```sql
+UPDATE agents SET state = 'RESERVED', reservation_id = :res_id, lease_until = :lease
+WHERE id = :id AND state = 'AVAILABLE';
+```
+
+---
+
+## 14. Idempotency
+
+Telephony carriers often resend webhooks on network timeouts. In SmartDialer:
+- Every provider event contains a globally unique `event_id`.
+- Each `Call` model maintains a `processed_event_ids: set[str]`.
+- Incoming events check set membership in $O(1)$. If `event_id` is already present, the transition is dropped immediately before any version counters or state transitions mutate.
+
+---
+
+## 15. Out-of-Order Events
+
+Due to network routing, a `COMPLETED` webhook may arrive before a delayed `RINGING` or `ANSWERED` event.
+- Every state in `CallState` is assigned a monotonic rank:
+  $$\text{QUEUED}(0) < \text{RESERVED}(1) < \text{INITIATED}(2) < \text{RINGING}(3) < \text{ANSWERED}(4) < \text{CONNECTED}(5) < \text{TERMINAL}(6)$$
+- `apply_transition()` accepts an event only if $\text{rank}(\text{new\_state}) > \text{rank}(\text{current\_state})$.
+- Terminal states (`COMPLETED`, `FAILED`, `CANCELLED`) all share rank 6, acting as black holes. A late `ANSWERED` event cannot resurrect a completed call.
+
+---
+
+## 16. Scaling Considerations (Prototype vs. Production)
+
+| Architecture Component | Current Prototype Implementation | Production Scaling Upgrade |
+|---|---|---|
+| **State Repository** | In-Memory `StateStore` with `threading.Lock` | PostgreSQL with `SELECT ... FOR UPDATE SKIP LOCKED` |
+| **Telephony Transport** | Async daemon threads with simulated latency | Asynchronous HTTP client (`httpx`) to Twilio / SIP Trunk |
+| **Worker Scaling** | Single-process multi-threading | Stateless worker pool (Kubernetes / ECS) polling campaign queues |
+| **Circuit Breaker State** | In-process atomic lock | Distributed Redis read-through cache |
+| **Telemetry & Metrics** | In-memory cycle history | Prometheus metrics + Grafana dashboard |
