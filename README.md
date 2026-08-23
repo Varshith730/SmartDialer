@@ -1,6 +1,14 @@
 # SmartDialer
 
-A fully functional predictive dialer prototype for a collections environment, built to demonstrate system design, concurrency correctness, and progressive/predictive pacing — without Kafka, Redis, Kubernetes, or microservices.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smartdialer-credresolve.streamlit.app/)
+[![Tests](https://img.shields.io/badge/tests-202%20passed-success)](https://github.com/Varshith730/SmartDialer)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](https://www.python.org/)
+
+> 🌐 **Live Hosted Control Center:** **[https://smartdialer-credresolve.streamlit.app/](https://smartdialer-credresolve.streamlit.app/)**
+> 
+> *The SmartDialer Operations Suite is deployed and running live on Streamlit Cloud. You can interact with the dashboard, dispatch calls, tune pacing, and inject chaos without local installation.*
+
+A fully functional progressive and predictive dialer prototype for a collections environment, built to demonstrate system design, concurrency correctness, safety bounding, and fault tolerance — without Kafka, Redis, Kubernetes, or microservices.
 
 ---
 
